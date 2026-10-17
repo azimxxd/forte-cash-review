@@ -1,24 +1,22 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  ArrowUpRight,
+  BookOpen,
   Check,
-  ChevronRight,
   CircleAlert,
   Clock3,
   FileVideo,
   Film,
-  ListChecks,
   LoaderCircle,
-  LockKeyhole,
   Play,
   Plus,
   ScanLine,
-  ShieldCheck,
   Upload,
   X,
 } from "lucide-react";
+import "@fontsource-variable/open-sans";
 import "./style.css";
+import wordmark from "./assets/forte-wordmark.svg";
 
 type Rule = {
   id: string;
@@ -126,7 +124,6 @@ async function api<T>(url: string, options?: RequestInit): Promise<T> {
   return response.json();
 }
 function App() {
-  const [tab, setTab] = useState<"review" | "rules">("review");
   const [rules, setRules] = useState<Rule[]>([]),
     [health, setHealth] = useState<Health | null>(null);
   const [file, setFile] = useState<File | null>(null),
@@ -248,628 +245,376 @@ function App() {
     current = events[selected],
     currentRule = rules.find((r) => r.id === current?.rule_id);
   const finished = job?.status === "done";
+  const hasViolation = job?.verdict
+    ? job.verdict === "violation"
+    : events.length > 0;
+  const modelNote = health?.ready
+    ? ""
+    : health?.model_state === "loading"
+      ? "Модель загружается, запуск станет доступен через минуту."
+      : "Модель недоступна, запуск станет доступен, когда сервер будет готов.";
   return (
-    <div className="shell">
-      <aside className="sidebar">
-        <a href="/" className="brand">
-          <span className="brand-mark">
-            <ScanLine size={24} />
-          </span>
-          касса<span className="brand-dot">.</span>
-        </a>
-        <div className="workspace">
-          <span className="workspace-avatar">F</span>
-          <div>
-            ForteBank<span>Datathon 26 · MVP</span>
-          </div>
+    <div className="ft-app">
+      <header className="site-header">
+        <div className="header-inner">
+          <a href="/" className="brand">
+            <img src={wordmark} alt="Forte" width={101} height={30} />
+            <span className="brand-product">Касса</span>
+          </a>
+          {(finished || job?.status === "failed") && (
+            <button className="secondary header-new" onClick={reset}>
+              <Plus size={17} />
+              Новая проверка
+            </button>
+          )}
         </div>
-        <span className="nav-label">РАБОЧЕЕ ПРОСТРАНСТВО</span>
-        <nav>
-          <button
-            className={tab === "review" ? "active" : ""}
-            onClick={() => setTab("review")}
-          >
-            <Film size={18} />
-            Проверка видео
-            <ChevronRight size={15} />
-          </button>
-          <button
-            className={tab === "rules" ? "active" : ""}
-            onClick={() => setTab("rules")}
-          >
-            <ListChecks size={18} />
-            Каталог правил<span className="count">7</span>
-          </button>
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="local-icon">
-            <LockKeyhole size={18} />
+      </header>
+      <main className="workspace">
+        {error && (
+          <div className="error" role="alert">
+            <CircleAlert size={18} />
+            {error}
+            <button aria-label="Закрыть ошибку" onClick={() => setError("")}>
+              <X size={16} />
+            </button>
           </div>
-          <strong>Внутри вашего контура</strong>
-          <p>Видео обрабатывается локально. Внешние AI API не используются.</p>
-          <span className="version">ПРОТОТИП / V0.1</span>
-        </div>
-      </aside>
-      <div className="main">
-        <header className="topbar">
-          <span>
-            Рабочее пространство <ChevronRight size={14} />{" "}
-            <strong>
-              {tab === "review" ? "Проверка видео" : "Каталог правил"}
-            </strong>
-          </span>
-          <span className="private">
-            <LockKeyhole size={13} /> Защищённый доступ
-          </span>
-        </header>
-        <main>
-          <div className="heading">
+        )}
+        {pollError && (
+          <div className="error" role="alert">
+            Не удалось обновить статус: {pollError}. Повторяем запрос.
+          </div>
+        )}
+        {!job && (
+          <section
+            className={`upload ${drag ? "drag" : ""}`}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDrag(true);
+            }}
+            onDragLeave={() => setDrag(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDrag(false);
+              choose(e.dataTransfer.files[0]);
+            }}
+          >
+            <div className="upload-icon">
+              {file ? <FileVideo size={30} /> : <Upload size={30} />}
+            </div>
+            <h1>{file ? file.name : "Загрузите видео с кассы"}</h1>
+            <p>
+              {file
+                ? `${(file.size / 1024 / 1024).toFixed(1)} МБ · готово к проверке`
+                : `Перетащите файл сюда · MOV до ${health?.max_upload_mb || 100} МБ`}
+            </p>
+            <div className="upload-actions">
+              <button
+                className="secondary"
+                disabled={busy}
+                onClick={() => input.current?.click()}
+              >
+                {file ? "Другой файл" : "Выбрать видео"}
+              </button>
+              {file && (
+                <button
+                  className="primary"
+                  disabled={!health?.ready || !!busy}
+                  onClick={submit}
+                >
+                  {uploading ? (
+                    <LoaderCircle className="spin" size={17} />
+                  ) : (
+                    <ScanLine size={17} />
+                  )}
+                  {uploading ? "Загрузка…" : "Проверить"}
+                </button>
+              )}
+            </div>
+            <input
+              ref={input}
+              type="file"
+              accept=".mov,video/quicktime"
+              hidden
+              onChange={(e) => choose(e.target.files?.[0])}
+            />
+            {modelNote && <span className="model-note">{modelNote}</span>}
+          </section>
+        )}
+        {job?.status === "processing" && (
+          <section className="panel progress-panel" aria-live="polite">
+            <LoaderCircle className="spin" size={25} />
             <div>
-              <div className="eyebrow">ВИДЕОАНАЛИТИКА КАССОВЫХ ОПЕРАЦИЙ</div>
-              <h1>
-                {tab === "review"
-                  ? "Внимание к каждой операции."
-                  : "Правила и границы выводов."}
-              </h1>
+              <h2>{stageName(job.stage)}</h2>
               <p>
-                {tab === "review"
-                  ? "Найдите моменты, которые требуют проверки человеком."
-                  : "Рабочая таксономия команды. Нормативное обоснование ещё проверяется."}
+                {job.filename} · прошло{" "}
+                {Math.max(0, Math.floor(now / 1000 - job.created_at))} сек
               </p>
             </div>
-            {finished && tab === "review" && (
-              <button className="secondary" onClick={reset}>
-                <Plus size={17} />
-                Новая проверка
-              </button>
-            )}
-          </div>
-          <div className="notice">
-            <ShieldCheck size={19} />
-            <span>
-              Помощник проверяющего. Выводы основаны на видимых действиях и
-              требуют вашей оценки.
-            </span>
-            <span className="notice-tag">ЧЕЛОВЕК ПРИНИМАЕТ РЕШЕНИЕ</span>
-          </div>
-          {tab === "rules" ? (
-            <div className="rules-list">
-              {rules.map((rule, i) => (
-                <article className="rule-card" key={rule.id}>
-                  <span className="step-num">
-                    {String(i + 1).padStart(2, "0")}
-                  </span>
-                  <div>
-                    <h2>{rule.name}</h2>
-                    <p>{rule.description}</p>
-                    <dl>
-                      <dt>Условия применимости</dt>
-                      <dd>{rule.applicability_conditions}</dd>
-                      <dt>Исключения</dt>
-                      <dd>{rule.exceptions}</dd>
-                      <dt>Наблюдаемые признаки</dt>
-                      <dd>{rule.observable_signs}</dd>
-                    </dl>
-                    <Source rule={rule} />
-                  </div>
-                </article>
-              ))}
+            <span className="pill">В обработке</span>
+          </section>
+        )}
+        {job?.status === "failed" && (
+          <section className="panel failed-panel" role="alert">
+            <CircleAlert size={25} />
+            <div>
+              <h2>Проверка не завершена</h2>
+              <p>
+                {job.error?.message || "Не удалось обработать видео."} Вердикт
+                не сформирован.
+              </p>
             </div>
-          ) : (
-            <>
-              {error && (
-                <div className="error" role="alert">
-                  <CircleAlert size={18} />
-                  {error}
-                  <button
-                    aria-label="Закрыть ошибку"
-                    onClick={() => setError("")}
-                  >
-                    <X size={16} />
-                  </button>
-                </div>
-              )}
-              {pollError && (
-                <div className="error" role="alert">
-                  Не удалось обновить статус: {pollError}. Повторяем запрос;
-                  результат пока неизвестен.
-                </div>
-              )}
-              {!finished && (
-                <div className="upload-grid">
-                  <section className="panel upload-panel">
-                    <div className="panel-heading">
-                      <div>
-                        <span className="step-num">01</span>
-                        <h2>Загрузите запись</h2>
-                      </div>
-                      <span className="muted">Одна касса · одно видео</span>
-                    </div>
-                    <div
-                      className={`dropzone ${drag ? "drag" : ""}`}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        setDrag(true);
-                      }}
-                      onDragLeave={() => setDrag(false)}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        setDrag(false);
-                        choose(e.dataTransfer.files[0]);
-                      }}
-                    >
-                      <div className="upload-icon">
-                        {file ? <FileVideo size={30} /> : <Upload size={30} />}
-                      </div>
-                      <h3>{file ? file.name : "Перетащите видео сюда"}</h3>
-                      <p>
-                        {file
-                          ? `${(file.size / 1024 / 1024).toFixed(1)} МБ · готово к загрузке`
-                          : "или выберите файл на вашем устройстве"}
-                      </p>
-                      <button
-                        className="secondary"
-                        disabled={busy}
-                        onClick={() => input.current?.click()}
-                      >
-                        {file ? "Выбрать другой файл" : "Выбрать видео"}
-                        <ArrowUpRight size={16} />
-                      </button>
-                      <input
-                        ref={input}
-                        type="file"
-                        accept=".mov,video/quicktime"
-                        hidden
-                        onChange={(e) => choose(e.target.files?.[0])}
-                      />
-                      <span className="file-hint">
-                        MOV · до {health?.max_upload_mb || 100} МБ · до 145
-                        секунд
-                      </span>
-                    </div>
-                    <div className="upload-footer">
-                      <span>
-                        <LockKeyhole size={15} /> Доступ только проверяющим
-                      </span>
-                      <button
-                        className="primary"
-                        disabled={!file || !health?.ready || !!busy}
-                        onClick={submit}
-                      >
-                        {uploading ? (
-                          <LoaderCircle className="spin" size={17} />
-                        ) : (
-                          <ScanLine size={17} />
-                        )}{" "}
-                        {uploading ? "Загрузка…" : "Начать проверку"}
-                      </button>
-                    </div>
-                  </section>
-                  <section className="panel process-panel">
-                    <div className="panel-heading">
-                      <div>
-                        <span className="step-num">02</span>
-                        <h2>Проверка записи</h2>
-                      </div>
-                    </div>
-                    <div
-                      className={`model-status ${health?.ready ? "ready" : ""}`}
-                    >
-                      <span className="status-dot" />
-                      <div>
-                        <strong>
-                          {health?.ready
-                            ? "Модель готова"
-                            : health?.model_state === "loading"
-                              ? "Модель загружается"
-                              : health?.model_state === "disabled"
-                                ? "Модель не запущена"
-                                : "Модель недоступна"}
-                        </strong>
-                        <span>Qwen3-VL-4B-Instruct · локально</span>
-                      </div>
-                    </div>
-                    {!health?.ready && (
-                      <p className="setup-note">
-                        Для анализа нужны локальные веса и доступный GPU.
-                        Результат появится только после настоящего анализа.
-                      </p>
-                    )}
-                    <ol className="steps">
-                      {[
-                        "Обзор всей последовательности",
-                        "Уточнение возможных событий",
-                        "Подбор кадров и объяснение",
-                      ].map((s, i) => (
-                        <li key={s}>
-                          <span>{i + 1}</span>
-                          <div>
-                            <strong>{s}</strong>
-                            <p>
-                              {
-                                [
-                                  "Сохраняем контекст операции",
-                                  "Проверяем подозрительные фрагменты",
-                                  "Показываем, что требует внимания",
-                                ][i]
-                              }
-                            </p>
-                          </div>
-                        </li>
-                      ))}
-                    </ol>
-                    <div className="processing-foot">
-                      <Clock3 size={16} />
-                      <span>
-                        Лимит — 5 минут, включая очередь.
-                        <br />
-                        Скорость модели ещё не измерена.
-                      </span>
-                    </div>
-                  </section>
-                </div>
-              )}
-              {job?.status === "processing" && (
-                <section className="panel progress-panel" aria-live="polite">
-                  <LoaderCircle className="spin" size={25} />
+            <button className="secondary" onClick={reset}>
+              Повторить
+            </button>
+          </section>
+        )}
+        {finished && (
+          <>
+            <section
+              className={`verdict reveal-now ${hasViolation ? "attention" : "clear"}`}
+            >
+              <div className="verdict-icon">
+                {hasViolation ? <CircleAlert size={26} /> : <Check size={26} />}
+              </div>
+              <div>
+                <span className="eyebrow">Проверка завершена</span>
+                <h2>
+                  {hasViolation
+                    ? "Обнаружены признаки возможных нарушений"
+                    : "Нарушение не обнаружено"}
+                </h2>
+                <p>
+                  {hasViolation
+                    ? `${events.length} ${plural(events.length, "момент требует", "момента требуют", "моментов требуют")} вашей оценки — таймкоды, кадры и правила ниже.`
+                    : "Видимых признаков нарушений по известным категориям нет. Это подсказка для проверяющего, а не окончательное заключение."}
+                </p>
+              </div>
+              <span className="verdict-time">
+                <Clock3 size={16} />
+                {job.extended?.metrics.total_sec.toFixed(1)} сек
+              </span>
+            </section>
+            <div className="results-grid">
+              <section className="panel player-panel">
+                <div className="panel-heading">
                   <div>
-                    <h2>{stageName(job.stage)}</h2>
-                    <p>
-                      {job.filename} · прошло{" "}
-                      {Math.max(0, Math.floor(now / 1000 - job.created_at))} сек
-                    </p>
+                    <Film size={18} />
+                    <h2>{job.filename}</h2>
                   </div>
-                  <span className="pill">В обработке</span>
-                </section>
-              )}
-              {job?.status === "failed" && (
-                <section className="panel failed-panel" role="alert">
-                  <CircleAlert size={25} />
-                  <div>
-                    <h2>Проверка не завершена</h2>
-                    <p>
-                      {job.error?.message || "Не удалось обработать видео."}{" "}
-                      Вердикт не сформирован.
-                    </p>
-                  </div>
-                  <button className="secondary" onClick={reset}>
-                    Повторить
-                  </button>
-                </section>
-              )}
-              {!job && (
-                <section className="empty-result">
-                  <span className="empty-result-icon">
-                    <Film size={22} />
+                  <span className="muted">
+                    {time(job.extended?.metadata.duration_sec || 0)}
                   </span>
-                  <div>
-                    <h2>Здесь появится результат проверки</h2>
-                    <p>
-                      Видео, таймкоды, события и кадры для самостоятельной
-                      оценки.
-                    </p>
-                  </div>
-                  <div className="empty-tags">
-                    <span>СОБЫТИЯ</span>
-                    <span>КАДРЫ</span>
-                    <span>ИСТОЧНИКИ</span>
-                  </div>
-                </section>
-              )}
-              {finished && (
-                <>
-                  <section
-                    className={`verdict ${events.length ? "attention" : "clear"}`}
-                  >
-                    <div className="verdict-icon">
-                      {events.length ? (
-                        <CircleAlert size={26} />
-                      ) : (
-                        <Check size={26} />
-                      )}
-                    </div>
-                    <div>
-                      <span className="eyebrow">ПРОВЕРКА ЗАВЕРШЕНА</span>
-                      <h2>
-                        {events.length
-                          ? "Обнаружены признаки возможных нарушений"
-                          : "Признаки по рабочим категориям не найдены"}
-                      </h2>
-                      <p>
-                        {events.length
-                          ? `${events.length} событий требуют вашей оценки`
-                          : "Достаточно обоснованных признаков перечисленных нарушений не найдено. Это не гарантия их отсутствия."}
-                      </p>
-                    </div>
-                    <span className="verdict-time">
-                      <Clock3 size={16} />
-                      {job.extended?.metrics.total_sec.toFixed(1)} сек
-                    </span>
-                  </section>
-                  <section className="panel analysis-coverage">
-                    <h2>Что проанализировано</h2>
-                    <p className="coverage-counts">
-                      Кадров в обзоре:{" "}
-                      <strong>
-                        {job.extended?.metrics.overview_frame_count ?? "—"}
-                      </strong>
-                      {job.extended?.metrics.unique_frame_count !==
-                        undefined && (
-                        <>
-                          {" "}
-                          · Всего разных кадров:{" "}
-                          <strong>
-                            {job.extended.metrics.unique_frame_count}
-                          </strong>
-                        </>
-                      )}
-                      {job.extended?.metrics.inference_calls && (
-                        <>
-                          {" "}
-                          · Вызовов Qwen:{" "}
-                          <strong>
-                            {job.extended.metrics.inference_calls.length}
-                          </strong>
-                        </>
-                      )}
-                    </p>
-                    {job.extended?.scene_summary ? (
-                      <>
-                        <h3>Описание видимого по версии модели</h3>
-                        <p>{job.extended.scene_summary}</p>
-                        <ul>
-                          {job.extended.observations?.map((note, index) => (
-                            <li key={index}>{note}</li>
-                          ))}
-                        </ul>
-                        {job.extended.metrics.negative_audit_performed && (
-                          <p className="coverage-audit">
-                            <Check size={15} />
-                            После пустого обзора выполнена повторная проверка
-                            всей записи.
-                          </p>
-                        )}
-                        <details>
-                          <summary>Кадры, переданные в обзор</summary>
-                          <p>
-                            Это примеры входных кадров. Они сами по себе не
-                            доказывают нарушение.
-                          </p>
-                          <div className="evidence-grid">
-                            {job.extended.analysis_samples?.map((frame) => (
-                              <button
-                                key={frame.timestamp_sec}
-                                className="evidence"
-                                onClick={() =>
-                                  seek(frame.timestamp_sec, selected)
-                                }
-                              >
-                                <img
-                                  src={`data:image/jpeg;base64,${frame.image_base64}`}
-                                  alt={`Входной кадр ${time(frame.timestamp_sec)}`}
-                                />
-                                <span>{time(frame.timestamp_sec)}</span>
-                              </button>
-                            ))}
-                          </div>
-                        </details>
-                      </>
-                    ) : (
-                      <p>
-                        Результат получен предыдущей версией анализа. Для
-                        повторной проверки с новым алгоритмом загрузите запись
-                        снова.
-                      </p>
-                    )}
-                  </section>
-                  <div className="results-grid">
-                    <section className="panel player-panel">
-                      <div className="panel-heading">
-                        <div>
-                          <Film size={18} />
-                          <h2>{job.filename}</h2>
-                        </div>
-                        <span className="muted">
-                          {time(job.extended?.metadata.duration_sec || 0)}
-                        </span>
-                      </div>
-                      <video
-                        ref={video}
-                        controls
-                        preload="metadata"
-                        src={job.video_url}
-                        onError={() =>
-                          setError(
-                            "Не удалось воспроизвести видео. Проверьте доступ и обновите страницу.",
-                          )
-                        }
-                      />
-                      <div className="timeline-label">
-                        <span>События на записи</span>
-                        <span>{events.length} отметок</span>
-                      </div>
-                      <div className="timeline">
-                        {events.map((event, i) => (
-                          <button
-                            key={i}
-                            title={`${time(event.start_sec)} — ${rules.find((r) => r.id === event.category)?.name}`}
-                            aria-label={`Перейти к событию ${i + 1}`}
-                            onClick={() => seek(event.start_sec, i)}
-                            style={{
-                              left: `${(event.start_sec / (job.extended?.metadata.duration_sec || 1)) * 100}%`,
-                              width: `${Math.max(1, ((event.end_sec - event.start_sec) / (job.extended?.metadata.duration_sec || 1)) * 100)}%`,
-                            }}
-                          />
-                        ))}
-                      </div>
-                      <div className="timeline-label">
-                        <span>00:00</span>
-                        <span>
-                          {time(job.extended?.metadata.duration_sec || 0)}
-                        </span>
-                      </div>
-                    </section>
-                    <section className="panel event-list">
-                      <div className="panel-heading">
-                        <h2>Моменты для проверки</h2>
-                        <span className="count">{events.length}</span>
-                      </div>
-                      {events.length ? (
-                        events.map((event, i) => (
-                          <button
-                            key={i}
-                            className={`event-item ${selected === i ? "selected" : ""}`}
-                            onClick={() => seek(event.start_sec, i)}
-                          >
-                            <div>
-                              <span className="event-index">
-                                {String(i + 1).padStart(2, "0")}
-                              </span>
-                              <span className="event-time">
-                                <Play size={12} />
-                                {time(event.start_sec)} — {time(event.end_sec)}
-                              </span>
-                            </div>
-                            <h3>
-                              {rules.find((r) => r.id === event.category)
-                                ?.name || event.category}
-                            </h3>
-                            <p>{event.observed_action}</p>
-                          </button>
-                        ))
-                      ) : (
-                        <p className="no-events">
-                          Событий по рабочим категориям не найдено. Ознакомьтесь
-                          с ограничениями анализа ниже.
-                        </p>
-                      )}
-                    </section>
-                  </div>
-                  {current && (
-                    <section className="panel evidence-panel">
-                      <div className="panel-heading">
-                        <div>
-                          <span className="step-num">
-                            {String(selected + 1).padStart(2, "0")}
+                </div>
+                <video
+                  ref={video}
+                  controls
+                  preload="metadata"
+                  src={job.video_url}
+                  onError={() =>
+                    setError(
+                      "Не удалось воспроизвести видео. Проверьте доступ и обновите страницу.",
+                    )
+                  }
+                />
+                <div className="timeline-label">
+                  <span>События на записи</span>
+                  <span>{events.length} отметок</span>
+                </div>
+                <div className="timeline">
+                  {events.map((event, i) => (
+                    <button
+                      key={i}
+                      title={`${time(event.start_sec)} — ${rules.find((r) => r.id === event.category)?.name}`}
+                      aria-label={`Перейти к событию ${i + 1}`}
+                      onClick={() => seek(event.start_sec, i)}
+                      style={{
+                        left: `${(event.start_sec / (job.extended?.metadata.duration_sec || 1)) * 100}%`,
+                        width: `${Math.max(1, ((event.end_sec - event.start_sec) / (job.extended?.metadata.duration_sec || 1)) * 100)}%`,
+                      }}
+                    />
+                  ))}
+                </div>
+                <div className="timeline-label">
+                  <span>00:00</span>
+                  <span>{time(job.extended?.metadata.duration_sec || 0)}</span>
+                </div>
+              </section>
+              <section className="panel event-list">
+                <div className="panel-heading">
+                  <h2>Моменты для проверки</h2>
+                  <span className="count">{events.length}</span>
+                </div>
+                {events.length ? (
+                  events.map((event, i) => {
+                    const violation = job.violations?.[i];
+                    const thumb = violation?.evidence_frames[0];
+                    const at = violation?.timecode_sec ?? event.start_sec;
+                    const rule = rules.find((r) => r.id === event.category);
+                    return (
+                      <button
+                        key={i}
+                        className={`event-item ${selected === i ? "selected" : ""}`}
+                        onClick={() => seek(at, i)}
+                      >
+                        {thumb && (
+                          <span className="event-thumb">
+                            <img
+                              src={`data:image/jpeg;base64,${thumb.image_base64}`}
+                              alt=""
+                            />
                           </span>
-                          <h2>Основание для проверки</h2>
-                        </div>
-                        <span className="muted">Кадры из исходного видео</span>
-                      </div>
-                      <div className="evidence-grid">
-                        {job.violations?.[selected]?.evidence_frames.map(
-                          (frame) => (
-                            <button
-                              key={frame.timestamp_sec}
-                              className="evidence"
-                              onClick={() =>
-                                seek(frame.timestamp_sec, selected)
-                              }
-                            >
-                              <img
-                                src={`data:image/jpeg;base64,${frame.image_base64}`}
-                                alt={`Наблюдаемое событие, ${time(frame.timestamp_sec)}`}
-                              />
-                              <span>
-                                <Play size={12} />
-                                {time(frame.timestamp_sec)}
-                              </span>
-                            </button>
-                          ),
                         )}
-                      </div>
-                      <div className="explanation">
-                        <div>
-                          <h3>Наблюдаемое действие</h3>
-                          <p>{current.observed_action}</p>
-                          <h3>Почему требует проверки</h3>
-                          <p>{current.applicability_basis}</p>
-                        </div>
-                        <div>
-                          <h3>Неопределённость</h3>
-                          <p>{current.uncertainty_reason}</p>
-                          {currentRule && <Source rule={currentRule} />}
-                        </div>
-                      </div>
-                    </section>
-                  )}
-                  <details className="panel limitations" open>
-                    <summary>Ограничения и дополнительные наблюдения</summary>
-                    <ul>
-                      {job.extended?.limitations.map((s) => (
-                        <li key={s}>{s}</li>
-                      ))}
-                    </ul>
-                    {!!job.extended?.review_notes.length && (
+                        <span className="event-body">
+                          <span className="event-meta">
+                            <span className="event-index">
+                              {String(i + 1).padStart(2, "0")}
+                            </span>
+                            <span className="event-time">
+                              <Play size={12} />
+                              {time(at)}
+                            </span>
+                          </span>
+                          <h3>
+                            {violation?.type || rule?.name || event.category}
+                          </h3>
+                          <p>
+                            {violation?.description || event.observed_action}
+                          </p>
+                          {rule && (
+                            <span className="event-rule">
+                              <BookOpen size={13} />
+                              {sourceLabel(rule)}
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <p className="no-events">
+                    Событий по рабочим категориям не найдено. Ознакомьтесь с
+                    ограничениями анализа ниже.
+                  </p>
+                )}
+              </section>
+            </div>
+            {current && (
+              <section className="panel evidence-panel">
+                <div className="panel-heading">
+                  <div>
+                    <span className="step-num">
+                      {String(selected + 1).padStart(2, "0")}
+                    </span>
+                    <h2>
+                      {job.violations?.[selected]?.type ||
+                        currentRule?.name ||
+                        "Основание для проверки"}
+                    </h2>
+                  </div>
+                  <span className="event-time">
+                    <Clock3 size={14} />
+                    Таймкод{" "}
+                    {time(
+                      job.violations?.[selected]?.timecode_sec ??
+                        current.start_sec,
+                    )}
+                  </span>
+                </div>
+                <div className="evidence-grid">
+                  {job.violations?.[selected]?.evidence_frames.map((frame) => (
+                    <button
+                      key={frame.timestamp_sec}
+                      className="evidence"
+                      onClick={() => seek(frame.timestamp_sec, selected)}
+                    >
+                      <img
+                        src={`data:image/jpeg;base64,${frame.image_base64}`}
+                        alt={`Наблюдаемое событие, ${time(frame.timestamp_sec)}`}
+                      />
+                      <span>
+                        <Play size={12} />
+                        {time(frame.timestamp_sec)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <div className="explanation">
+                  <div>
+                    <h3>Что видно на видео</h3>
+                    <p>{current.observed_action}</p>
+                    <h3>Почему это может быть нарушением</h3>
+                    <p>{current.applicability_basis}</p>
+                    {current.uncertainty_reason && (
                       <>
-                        <h3>Наблюдения, не включённые в вердикт</h3>
-                        <ul>
-                          {job.extended.review_notes.map((s) => (
-                            <li key={s}>{s}</li>
-                          ))}
-                        </ul>
+                        <h3>Что нельзя утверждать по видео</h3>
+                        <p>{current.uncertainty_reason}</p>
                       </>
                     )}
-                    <details>
-                      <summary>Время этапов</summary>
-                      <dl>
-                        {Object.entries(job.extended?.metrics.stages || {}).map(
-                          ([s, n]) => (
-                            <React.Fragment key={s}>
-                              <dt>{stageName(s)}</dt>
-                              <dd>{n.toFixed(2)} сек</dd>
-                            </React.Fragment>
-                          ),
-                        )}
-                      </dl>
-                    </details>
-                  </details>
-                </>
-              )}
-            </>
-          )}
-          <footer>
-            <span>
-              касса.{" "}
-              <span className="muted">Помощник проверки видеозаписей</span>
-            </span>
-            <span>
-              Datathon 26 <span className="footer-dot">•</span> ForteBank
-            </span>
-          </footer>
-        </main>
-      </div>
+                  </div>
+                  {currentRule && <Source rule={currentRule} />}
+                </div>
+              </section>
+            )}
+          </>
+        )}
+      </main>
     </div>
   );
 }
+const stripLead = (title: string) =>
+  title.replace(/\s*—\s*отправная точка исследования\s*$/i, "");
+function sourceLabel(rule: Rule) {
+  if (rule.normative_source)
+    return [rule.normative_source.title, rule.normative_source.section]
+      .filter(Boolean)
+      .join(", ");
+  const lead = rule.research_leads[0];
+  return lead
+    ? `${stripLead(lead.title)} · пункт уточняется`
+    : "Источник уточняется";
+}
+function plural(n: number, one: string, few: string, many: string) {
+  const m10 = n % 10,
+    m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+}
 function Source({ rule }: { rule: Rule }) {
+  const verified =
+    rule.source_verification_status === "verified" && rule.normative_source;
+  const lead = rule.research_leads[0];
   return (
-    <div className="source">
-      <span className="source-status">
-        {rule.source_verification_status === "verified"
-          ? "Источник проверен"
-          : "Нормативная связь не проверена"}
+    <aside className="source">
+      <span className="source-label">
+        <BookOpen size={15} /> Правило и источник
       </span>
+      <strong className="source-rule">{rule.name}</strong>
+      <p className="source-desc">{rule.description}</p>
       {rule.normative_source ? (
-        <p>
+        <p className="source-doc">
           <a href={rule.normative_source.url} target="_blank" rel="noreferrer">
             {rule.normative_source.title}
-          </a>{" "}
-          {rule.normative_source.section}
-        </p>
-      ) : (
-        <p>Подтверждённый источник для этой категории пока не указан.</p>
-      )}
-      {rule.research_leads.map((lead) => (
-        <details key={lead.url}>
-          <summary>Отправная точка исследования</summary>
-          <a href={lead.url} target="_blank" rel="noreferrer">
-            {lead.title} ↗
           </a>
-          <p>{lead.note}</p>
-        </details>
-      ))}
-    </div>
+          {rule.normative_source.section && (
+            <span>{rule.normative_source.section}</span>
+          )}
+        </p>
+      ) : lead ? (
+        <p className="source-doc">
+          <a href={lead.url} target="_blank" rel="noreferrer">
+            {stripLead(lead.title)} ↗
+          </a>
+        </p>
+      ) : null}
+      {!verified && (
+        <span className="source-status">
+          {rule.normative_source || lead
+            ? "Пункт документа уточняется"
+            : "Источник уточняется"}
+        </span>
+      )}
+    </aside>
   );
 }
 createRoot(document.getElementById("root")!).render(

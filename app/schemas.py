@@ -63,7 +63,7 @@ class EvidenceFrame(StrictModel):
 
 
 class Violation(StrictModel):
-    type: Category
+    type: str = Field(min_length=1)
     timecode_sec: float = Field(ge=0)
     description: str
     evidence_frames: list[EvidenceFrame] = Field(min_length=1, max_length=3)

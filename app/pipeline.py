@@ -4,7 +4,7 @@ import resource
 import sys
 from pathlib import Path
 from .schemas import ModelReport, OverviewReport, DoneResult, Violation, EvidenceFrame
-from .rules import RULE_BY_ID
+from .rules import RULE_BY_ID, violation_description
 from .video import probe, extract, sample_times, make_preview
 
 LIMITATIONS = [
@@ -217,12 +217,10 @@ def analyze(
                     image_base64=base64.b64encode(frame.jpeg).decode(),
                 )
             )
-        description = f"{event.observed_action} Основание для проверки: {event.applicability_basis} Ограничения: {event.uncertainty_reason} Нормативная связь категории не проверена."
-        if event.category.value == "unregistered_cash_transfer_between_workers":
-            description += " Регистрация передачи по видео не проверяется."
+        description = violation_description(event)
         violations.append(
             Violation(
-                type=event.category,
+                type=RULE_BY_ID[event.category.value]["name"],
                 timecode_sec=evidence[0].timestamp_sec,
                 description=description,
                 evidence_frames=evidence,

@@ -1,3 +1,4 @@
+from app.rules import RULE_BY_ID
 import base64
 import io
 import json
@@ -69,7 +70,11 @@ def test_original_frames_and_complete_pipeline(settings, synthetic_mov):
     assert result["verdict"] == "violation" and model.calls == 2
     assert extended["events"][0]["start_sec"] == 0
     assert "overview" in stages and "detail_1" in stages
-    frame = result["violations"][0]["evidence_frames"][0]
+    violation = result["violations"][0]
+    rule = RULE_BY_ID[extended["events"][0]["category"]]
+    assert violation["type"] == rule["name"]
+    assert rule["normative_source"]["section"] in violation["description"]
+    frame = violation["evidence_frames"][0]
     image = Image.open(io.BytesIO(base64.b64decode(frame["image_base64"])))
     assert image.format == "JPEG"
     assert abs(image.getpixel((100, 100))[2] - 220) < 12
