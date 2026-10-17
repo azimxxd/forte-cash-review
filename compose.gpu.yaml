@@ -1,0 +1,7 @@
+services:
+  cash-review:
+    build:
+      target: gpu
+    environment:
+      CASH_MODEL_ENABLED: "true"
+    gpus: all

@@ -1,0 +1,21 @@
+services:
+  cash-review:
+    build:
+      context: .
+      target: base
+    env_file: .env
+    environment:
+      CASH_DATA_DIR: /service/runtime
+      CASH_MODEL_PATH: /service/models/Qwen3-VL-4B-Instruct
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - jobs:/service/runtime
+      - ./models:/service/models:ro
+    init: true
+    shm_size: 2gb
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+volumes:
+  jobs:

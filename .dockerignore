@@ -1,0 +1,14 @@
+.git
+.venv
+.env
+.env.*
+!.env.example
+runtime
+models
+reports
+frontend/node_modules
+frontend/dist
+__pycache__
+.pytest_cache
+*.egg-info
+tests

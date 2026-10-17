@@ -1,0 +1,56 @@
+{
+  "$defs": {
+    "Category": {
+      "enum": [
+        "leave_workplace_during_service",
+        "cash_counting_without_client",
+        "cash_counting_without_controller",
+        "previous_cash_left_unsecured",
+        "mixing_cash_between_clients",
+        "unregistered_cash_transfer_between_workers",
+        "personal_items_or_cash_in_cash_area"
+      ],
+      "title": "Category",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "video_id": {
+      "title": "Video Id",
+      "type": "string"
+    },
+    "category": {
+      "$ref": "#/$defs/Category"
+    },
+    "start_sec": {
+      "minimum": 0,
+      "title": "Start Sec",
+      "type": "number"
+    },
+    "end_sec": {
+      "minimum": 0,
+      "title": "End Sec",
+      "type": "number"
+    },
+    "observed_action": {
+      "minLength": 8,
+      "title": "Observed Action",
+      "type": "string"
+    },
+    "rule_id": {
+      "title": "Rule Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "video_id",
+    "category",
+    "start_sec",
+    "end_sec",
+    "observed_action",
+    "rule_id"
+  ],
+  "title": "Annotation",
+  "type": "object"
+}

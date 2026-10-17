@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.env
+.env.*
+!.env.example
+runtime/
+models/
+frontend/node_modules/
+frontend/dist/
+*.egg-info/
+reports/
+.DS_Store
+
+.env.runpod
