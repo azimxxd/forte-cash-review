@@ -175,12 +175,22 @@ h3 {
 .brand img {
   display: block;
 }
+.brand-name {
+  color: var(--brand-maroon);
+  font-weight: 700;
+  font-size: 24px;
+  letter-spacing: -0.4px;
+}
 .brand-product {
   padding-left: var(--space-3);
   border-left: 1px solid var(--brand-coral);
-  color: var(--brand-maroon);
-  font-weight: 600;
-  font-size: 17px;
+  color: var(--ink-secondary);
+  font-size: 14px;
+}
+@media (max-width: 480px) {
+  .brand-product {
+    display: none;
+  }
 }
 .count {
   font-size: 13px;
