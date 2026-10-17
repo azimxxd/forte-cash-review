@@ -81,3 +81,69 @@ def test_detail_images_receive_more_tokens_without_losing_global_context(adapter
     assert tokens[24:].float().mean() > tokens[:24].float().mean()
     assert int(tokens.sum()) <= 12000
     assert adapter._prepared_metrics["image_count"] == 48
+
+
+def test_native_video_encodes_temporal_grid_and_real_timestamps(adapter):
+    from app.native_video import prepare_native_video
+
+    frames = [synthetic_frame(i) for i in range(8)]
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "video"},
+                {"type": "text", "text": "Describe the visible sequence."},
+            ],
+        }
+    ]
+    inputs, tokens = prepare_native_video(
+        adapter.processor, frames, messages, 12000, 30
+    )
+    assert "pixel_values_videos" in inputs and "pixel_values" not in inputs
+    assert inputs["video_grid_thw"][0, 0] == 4
+    text = adapter.processor.tokenizer.decode(inputs["input_ids"][0])
+    assert "<0.5 seconds>" in text and "<6.5 seconds>" in text
+    assert tokens <= 12000
+
+
+def test_native_video_preserves_irregular_sampling_and_pads_one_frame(adapter):
+    from app.native_video import prepare_native_video
+
+    frames = [synthetic_frame(t) for t in [0, 2, 10, 20, 24]]
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "video"},
+                {"type": "text", "text": "Inspect timeline."},
+            ],
+        }
+    ]
+    inputs, _ = prepare_native_video(adapter.processor, frames, messages, 12000, 30)
+    assert inputs["video_grid_thw"][0, 0] == 3
+    text = adapter.processor.tokenizer.decode(inputs["input_ids"][0])
+    assert "<15.0 seconds>" in text and "<24.0 seconds>" in text
+
+
+def test_json_token_filter_with_real_qwen_tokenizer_and_russian(adapter):
+    pytest.importorskip("lmformatenforcer")
+    import torch
+    from app.json_constraints import json_prefix
+    from lmformatenforcer.integrations.transformers import build_token_enforcer_tokenizer_data
+
+    tokenizer = adapter.processor.tokenizer
+    data = build_token_enforcer_tokenizer_data(tokenizer)
+    schema = {
+        "type": "object", "properties": {
+            "seen": {"type": "boolean"},
+            "evidence": {"type": "array", "items": {"type": "integer"}, "maxItems": 3},
+            "note": {"type": "string", "minLength": 8, "maxLength": 40},
+        }, "required": ["seen", "evidence", "note"], "additionalProperties": False,
+    }
+    allowed = json_prefix(data, schema)
+    sequence = tokenizer.encode("Synthetic input\n", add_special_tokens=False)
+    response = tokenizer.encode('{"seen":false,"evidence":[],"note":"Синтетический тест"}', add_special_tokens=False)
+    for token in response:
+        assert token in allowed(0, torch.tensor(sequence, dtype=torch.long))
+        sequence.append(token)
+    assert tokenizer.eos_token_id in allowed(0, torch.tensor(sequence, dtype=torch.long))

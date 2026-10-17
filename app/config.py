@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -16,6 +17,9 @@ class Settings(BaseSettings):
     model_path: Path = Path("models/Qwen3-VL-4B-Instruct")
     lora_path: str = ""
     device: str = "cuda:0"
+    qwen_input_mode: Literal["images", "video"] = "images"
+    qwen_discovery_style: Literal["narrative", "checklist"] = "narrative"
+    calibration_profile_path: str = ""
     job_timeout_sec: float = Field(290, gt=0, le=300)
     queue_capacity: int = Field(3, ge=1, le=50)
     max_upload_mb: int = Field(100, ge=1, le=500)

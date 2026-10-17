@@ -87,7 +87,9 @@ def analyze(
         lambda: extract(
             path,
             sample_times(duration, settings.overview_fps, settings.max_overview_frames),
-            settings.frame_max_pixels,
+            settings.detail_frame_max_pixels
+            if settings.qwen_input_mode == "video"
+            else settings.frame_max_pixels,
         ),
     )
     all_frames = {f.timestamp: f for f in frames}
@@ -100,6 +102,7 @@ def analyze(
                     "phase": "discover",
                     "instruction": "Опиши видимую последовательность всей операции, затем выдели кандидатов для подробной проверки.",
                     "duration_sec": duration,
+                    "source_fps": metadata["fps"],
                 },
                 deadline,
             ),
@@ -135,6 +138,7 @@ def analyze(
                         "phase": "audit",
                         "instruction": "Независимая повторная визуальная проверка всей записи. Первый обзор мог пропустить действия. Подробные кадры имеют приоритет. Не добавляй события без видимого основания.",
                         "duration_sec": duration,
+                        "source_fps": metadata["fps"],
                         "initial_scene_summary": overview.scene_summary,
                         "initial_observations": overview.observations,
                         "detail_timestamps": [f.timestamp for f in audit_frames],
@@ -176,6 +180,7 @@ def analyze(
             "scene_summary": overview.scene_summary,
             "observations": overview.observations,
             "duration_sec": duration,
+            "source_fps": metadata["fps"],
             "detail_timestamps": [f.timestamp for f in detail],
         }
         report = step(
@@ -246,11 +251,19 @@ def analyze(
         overview_last_timestamp_sec=frames[-1].timestamp,
         candidate_count=candidate_count,
         negative_audit_performed=audit is not None,
-        pipeline_version="visual-discovery-v2",
+        pipeline_version=(
+            "category-screening-v7"
+            if settings.qwen_discovery_style == "checklist"
+            else "temporal-guidance-v3"
+            if settings.qwen_input_mode == "video" or settings.calibration_profile_path
+            else "visual-discovery-v2"
+        ),
         model_id="Qwen/Qwen3-VL-4B-Instruct",
         adapter_path_configured=bool(settings.lora_path),
+        discovery_style=settings.qwen_discovery_style,
     )
     extended = dict(
+        candidates=[candidate.model_dump(mode="json") for candidate in candidates],
         events=[e.model_dump(mode="json") for e in events],
         metadata=metadata,
         metrics=metrics,
