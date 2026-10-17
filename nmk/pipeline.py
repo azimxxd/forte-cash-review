@@ -64,6 +64,9 @@ def time_left():
 PASS1_PROMPT = """Ты смотришь видео из кассового помещения банка (камера сверху). В помещении работает кассир;
 иногда приходят клиенты или инкассатор с зелёной пломбированной сумкой.
 
+Роли: КАССИР — сотрудник банка, который сидит за столом со стороны ноутбука и счётной машинки и
+работает с ними. КЛИЕНТ (или инкассатор) приходит к кассе и сидит/стоит НАПРОТИВ кассира.
+
 НЕ оценивай нарушения. Только зафиксируй, что видно, с секундами видео.
 Верни ТОЛЬКО JSON по схеме (null — если события не было или не видно):
 
@@ -107,6 +110,8 @@ PASS1_PROMPT = """Ты смотришь видео из кассового по�
   и посмотрела в него ДО начала пересчёта (null, если клиента с деньгами не было).
 - "previous_client_cash_still_on_desk_when_next_client_served_sec": секунда, когда кассир начала обслуживать
   следующего клиента, а деньги предыдущего клиента всё ещё лежат на столе (не убраны).
+- "cashier_leaves_sec": секунда, когда КАССИР встала со своего места и ушла (из помещения или от стола).
+  Уход клиента или инкассатора — НЕ уход кассира: если уходит только клиент, а кассир остаётся сидеть, ставь null.
 - "at_leave": состояние сразу после того, как кассир покинула рабочее место (null для всех полей, если не уходила).
   "screen_on_and_visible": экран светится и показывает содержимое (тёмный экран или закрытый ноутбук — false).
 """
@@ -148,6 +153,7 @@ LEAVE_PROMPT = """Это несколько кадров рабочего мес
 
 {
   "desk_items": "<перечисли всё, что лежит на столе>",
+  "cashier_at_workplace": <true|false>,
   "cash_on_desk": <true|false>,
   "stamps_or_documents_on_desk": <true|false>,
   "sealed_bag_on_desk": <true|false>,
@@ -156,6 +162,8 @@ LEAVE_PROMPT = """Это несколько кадров рабочего мес
   "laptop_screen": "<bright | dark | closed | not_visible>"
 }
 
+- "cashier_at_workplace": КАССИР (сотрудник со стороны ноутбука/счётной машинки) сидит или стоит на своём
+  рабочем месте. Клиент напротив кассира не считается.
 - "cash_on_desk": на столе лежат купюры/пачка денег (даже небольшая). Деньги могут выглядеть как небольшие
   прямоугольные листки бумаги розового, зелёного, голубого или бежевого цвета.
 - "stamps_or_documents_on_desk": на столе лежат штампы (печати) или рабочие документы/бланки.
@@ -378,7 +386,9 @@ def apply_rules(p1, p2, checks=None):
         kc = checks.get("key")
         if kc is not None:
             if kc["ans"].get("key_in_lock") is True:
-                add(leave, "SAFE_KEY_LEFT_IN_LOCK", "Кассир покинула рабочее место, оставив ключ в замке сейфа.", ev_of(kc))
+                # The key is a few pixels: one look is weak evidence, only two agreeing looks confirm it.
+                add(leave, "SAFE_KEY_LEFT_IN_LOCK", "Кассир покинула рабочее место, оставив ключ в замке сейфа.",
+                    2 if ev_of(kc) == 2 else 0)
         elif at.get("key_in_safe_lock") is True:
             add(leave, "SAFE_KEY_LEFT_IN_LOCK", "Кассир покинула рабочее место, оставив ключ в замке сейфа.", 0 if "key_in_safe_lock" in leave_weak else ev_leave)
         sc_ = checks.get("screen")   # unlocked = a work window on screen; lock screen / dark / closed are fine
@@ -541,8 +551,10 @@ PRIORITY = [
     "SEALED_BAG_CASH_NOT_COUNTED", "SEALED_BAG_ACCEPTED_WITHOUT_DOCUMENT", "SEALED_BAG_LEFT_UNATTENDED",
     "CLIENTS_CASH_MIXED", "NEXT_CLIENT_STARTED_BEFORE_PREVIOUS_COMPLETED", "PREVIOUS_CLIENT_CASH_NOT_SECURED",
     "CASH_COUNTED_WITHOUT_CLIENT_PRESENT", "COUNTED_CASH_RETURNED", "CASH_AUTHENTICITY_NOT_CHECKED",
-    "CASH_COUNTING_WITHOUT_DOCUMENT_CHECK", "CASH_EXPOSED_DURING_COFFEE", "CASH_NOT_SECURED_BEFORE_LEAVING",
-    "DOCUMENTS_OR_STAMPS_NOT_SECURED", "SAFE_LEFT_OPEN", "SAFE_KEY_LEFT_IN_LOCK", "COMPUTER_NOT_SECURED",
+    "CASH_COUNTING_WITHOUT_DOCUMENT_CHECK", "CASH_EXPOSED_DURING_COFFEE",
+    # leaving-state types, most reliably visible first (a lit screen or bills beat a few-pixel key)
+    "CASH_NOT_SECURED_BEFORE_LEAVING", "COMPUTER_NOT_SECURED", "DOCUMENTS_OR_STAMPS_NOT_SECURED",
+    "SAFE_LEFT_OPEN", "SAFE_KEY_LEFT_IN_LOCK",
     "DOOR_LEFT_OPEN", "PERSONAL_ITEMS_ON_WORK_DESK", "OTHER_VISIBLE_VIOLATION",
 ]
 
@@ -957,8 +969,15 @@ def _leave_state(model, processor, path, box, vid, p1, dur, double_check=True, r
                 second = look("end_2", dur - 6.5, dur - 3.0, END_PROMPT)
             p1 = {**p1, "cashier_leaves_sec": round(leave_t, 1)}
 
+    if snap and source == "pass1":
+        seen_there = [x.get("cashier_at_workplace") is True for x in (snap, second) if x]
+        if seen_there and all(seen_there):
+            # Pass 1 probably mistook a client (or someone else) leaving for the cashier leaving.
+            p1 = {**p1, "cashier_leaves_sec": None, "_leave_rejected": leave_t}
+            return p1, {"source": "rejected: cashier still at workplace", "first": snap, "second": second}
+
     if snap:
-        state = {k: v for k, v in snap.items() if isinstance(v, bool)}
+        state = {k: v for k, v in snap.items() if isinstance(v, bool) and k != "cashier_at_workplace"}
         weak = []
         # The model often lists stamps without naming them ("two cylindrical containers"); in recall
         # mode a matching desk item counts as a weak stamps/documents finding.
