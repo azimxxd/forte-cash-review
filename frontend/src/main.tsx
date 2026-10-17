@@ -8,6 +8,7 @@ import {
   FileVideo,
   Film,
   LoaderCircle,
+  Pause,
   Play,
   Plus,
   ScanLine,
@@ -100,6 +101,9 @@ const stages: Record<string, string> = {
   overview: "Обзор всей последовательности",
   audit_frames: "Выбор кадров для повторной проверки",
   audit: "Повторная проверка всей записи",
+  leave_check: "Проверка рабочего места после ухода",
+  focused_checks: "Проверка отдельных признаков",
+  evidence: "Подготовка кадров-доказательств",
   preview: "Подготовка плеера",
   done: "Проверка завершена",
   failed: "Проверка не завершена",
@@ -111,6 +115,129 @@ const stageName = (s: string) =>
     : s.startsWith("detail")
       ? "Уточнение возможного события"
       : s);
+type Marker = { at: number; label: string };
+
+/** Video with the site's own controls: one timeline to scrub, with red violation markers on it. */
+function Player({
+  src,
+  duration,
+  markers,
+  selected,
+  videoRef,
+  onMarker,
+  onError,
+}: {
+  src?: string;
+  duration: number;
+  markers: Marker[];
+  selected: number;
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  onMarker: (index: number) => void;
+  onError: () => void;
+}) {
+  const [playing, setPlaying] = useState(false),
+    [current, setCurrent] = useState(0),
+    [length, setLength] = useState(duration),
+    [hover, setHover] = useState<number | null>(null);
+  const bar = useRef<HTMLDivElement>(null),
+    dragging = useRef(false);
+  const total = length || duration || 1;
+
+  function toggle() {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) v.play().catch(() => undefined);
+    else v.pause();
+  }
+  function timeAt(clientX: number) {
+    const r = bar.current!.getBoundingClientRect();
+    return Math.min(1, Math.max(0, (clientX - r.left) / r.width)) * total;
+  }
+  function jump(t: number) {
+    const v = videoRef.current;
+    if (!v) return;
+    v.currentTime = Math.min(Math.max(0, t), total);
+    setCurrent(v.currentTime);
+  }
+  function onKey(e: React.KeyboardEvent) {
+    if (e.key === " " || e.key === "k") {
+      e.preventDefault();
+      toggle();
+    } else if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      jump(current - 5);
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      jump(current + 5);
+    }
+  }
+  return (
+    <div className="player" tabIndex={0} onKeyDown={onKey}>
+      <video
+        ref={videoRef}
+        preload="metadata"
+        src={src}
+        onClick={toggle}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+        onTimeUpdate={(e) => !dragging.current && setCurrent(e.currentTarget.currentTime)}
+        onLoadedMetadata={(e) => setLength(e.currentTarget.duration || duration)}
+        onError={onError}
+      />
+      <div className="controls">
+        <button className="ctrl-btn" onClick={toggle} aria-label={playing ? "Пауза" : "Воспроизвести"}>
+          {playing ? <Pause size={18} /> : <Play size={18} />}
+        </button>
+        <span className="ctrl-time">
+          {time(current)} / {time(total)}
+        </span>
+        <div
+          ref={bar}
+          className="scrub"
+          role="slider"
+          aria-label="Позиция в видео"
+          aria-valuemin={0}
+          aria-valuemax={total}
+          aria-valuenow={current}
+          onPointerDown={(e) => {
+            dragging.current = true;
+            e.currentTarget.setPointerCapture(e.pointerId);
+            jump(timeAt(e.clientX));
+          }}
+          onPointerMove={(e) => {
+            setHover(timeAt(e.clientX));
+            if (dragging.current) jump(timeAt(e.clientX));
+          }}
+          onPointerUp={() => (dragging.current = false)}
+          onPointerLeave={() => setHover(null)}
+        >
+          <div className="scrub-track">
+            <div className="scrub-fill" style={{ width: `${(current / total) * 100}%` }} />
+          </div>
+          {markers.map((m, i) => (
+            <button
+              key={i}
+              className={`scrub-marker ${selected === i ? "selected" : ""}`}
+              style={{ left: `${(m.at / total) * 100}%` }}
+              title={`${time(m.at)} — ${m.label}`}
+              aria-label={`Перейти к нарушению ${i + 1}: ${m.label}`}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => onMarker(i)}
+            />
+          ))}
+          <div className="scrub-head" style={{ left: `${(current / total) * 100}%` }} />
+          {hover !== null && (
+            <span className="scrub-hover" style={{ left: `${(hover / total) * 100}%` }}>
+              {time(hover)}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 async function api<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...options, credentials: "same-origin" });
   if (!response.ok) {
@@ -406,11 +533,21 @@ function App() {
                     {time(job.extended?.metadata.duration_sec || 0)}
                   </span>
                 </div>
-                <video
-                  ref={video}
-                  controls
-                  preload="metadata"
+                <Player
                   src={job.video_url}
+                  duration={job.extended?.metadata.duration_sec || 0}
+                  videoRef={video}
+                  selected={selected}
+                  markers={events.map((event, i) => ({
+                    at: job.violations?.[i]?.timecode_sec ?? event.start_sec,
+                    label:
+                      job.violations?.[i]?.type ||
+                      rules.find((r) => r.id === event.category)?.name ||
+                      event.category,
+                  }))}
+                  onMarker={(i) =>
+                    seek(job.violations?.[i]?.timecode_sec ?? events[i].start_sec, i)
+                  }
                   onError={() =>
                     setError(
                       "Не удалось воспроизвести видео. Проверьте доступ и обновите страницу.",
@@ -418,26 +555,8 @@ function App() {
                   }
                 />
                 <div className="timeline-label">
-                  <span>События на записи</span>
-                  <span>{events.length} отметок</span>
-                </div>
-                <div className="timeline">
-                  {events.map((event, i) => (
-                    <button
-                      key={i}
-                      title={`${time(event.start_sec)} — ${rules.find((r) => r.id === event.category)?.name}`}
-                      aria-label={`Перейти к событию ${i + 1}`}
-                      onClick={() => seek(event.start_sec, i)}
-                      style={{
-                        left: `${(event.start_sec / (job.extended?.metadata.duration_sec || 1)) * 100}%`,
-                        width: `${Math.max(1, ((event.end_sec - event.start_sec) / (job.extended?.metadata.duration_sec || 1)) * 100)}%`,
-                      }}
-                    />
-                  ))}
-                </div>
-                <div className="timeline-label">
-                  <span>00:00</span>
-                  <span>{time(job.extended?.metadata.duration_sec || 0)}</span>
+                  <span>Нарушения отмечены красным — нажмите, чтобы перейти</span>
+                  <span>{events.length}</span>
                 </div>
               </section>
               <section className="panel event-list">

@@ -13,7 +13,13 @@ log = logging.getLogger(__name__)
 
 def child_main(connection, settings):
     try:
-        model = QwenAdapter(settings)
+        if settings.engine == "nmk":
+            from .nmk_engine import NmkModel, analyze as nmk_analyze
+            model = NmkModel(settings)
+            run = nmk_analyze
+        else:
+            model = QwenAdapter(settings)
+            run = analyze
         model.load()
         connection.send(("ready", None))
     except Exception as exc:
@@ -26,7 +32,7 @@ def child_main(connection, settings):
             return
         try:
             job_id, created, deadline = task
-            result = analyze(
+            result = run(
                 job_id,
                 settings.data_dir / job_id,
                 settings,

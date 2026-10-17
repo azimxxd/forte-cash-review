@@ -90,6 +90,8 @@ def create_app(settings=None, worker_factory=Worker):
             raise HTTPException(401, "Неверный API-ключ")
 
     def ui_auth(credentials: HTTPBasicCredentials | None = Depends(basic)):
+        if settings.ui_open:
+            return
         if credentials is None or not (
             secrets.compare_digest(
                 credentials.username.encode(), settings.ui_user.encode()
@@ -108,8 +110,11 @@ def create_app(settings=None, worker_factory=Worker):
 
     def ui_write(request: Request, _: None = Depends(ui_auth)):
         origin = request.headers.get("origin")
-        if origin and origin.rstrip("/") != str(request.base_url).rstrip("/"):
-            raise HTTPException(403, "Запрос с другого сайта запрещён")
+        if origin:
+            from urllib.parse import urlsplit
+            seen_host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
+            if urlsplit(origin).netloc.lower() != seen_host.lower():
+                raise HTTPException(403, "Запрос с другого сайта запрещён")
         if request.headers.get("sec-fetch-site") == "cross-site":
             raise HTTPException(403, "Запрос с другого сайта запрещён")
 
@@ -122,7 +127,7 @@ def create_app(settings=None, worker_factory=Worker):
                 api_auth(request.headers.get("x-api-key", ""))
             except HTTPException as exc:
                 return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
-        elif not request.url.path.startswith("/health/"):
+        elif not request.url.path.startswith("/health/") and not settings.ui_open:
             try:
                 scheme, token = request.headers.get("authorization", "").split(" ", 1)
                 if scheme.lower() != "basic":
@@ -279,6 +284,9 @@ def create_app(settings=None, worker_factory=Worker):
 
     @app.get("/ui/api/rules", dependencies=[Depends(ui_auth)])
     def rules():
+        if settings.engine == "nmk":
+            from .nmk_engine import ui_rules
+            return ui_rules(settings)
         return RULES
 
     @app.get("/ui/api/health", dependencies=[Depends(ui_auth)])
@@ -287,7 +295,7 @@ def create_app(settings=None, worker_factory=Worker):
             "ready": worker.ready,
             "model_state": worker.state,
             "max_upload_mb": settings.max_upload_mb,
-            "model": "Qwen3-VL-4B-Instruct",
+            "model": "Qwen3-VL-8B-Instruct" if settings.engine == "nmk" else "Qwen3-VL-4B-Instruct",
             "queue_capacity": settings.queue_capacity,
         }
 

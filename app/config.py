@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     data_dir: Path = Path("runtime")
     frontend_dir: Path = Path("frontend/dist")
     model_enabled: bool = False
+    engine: Literal["qwen", "nmk"] = "qwen"
+    nmk_dir: Path = Path("nmk")
+    nmk_model_path: Path = Path("/root/models/Qwen3-VL-8B-Instruct")
+    nmk_precision: Literal["4bit", "8bit", "bf16"] = "bf16"
+    ui_open: bool = False
     model_path: Path = Path("models/Qwen3-VL-4B-Instruct")
     lora_path: str = ""
     device: str = "cuda:0"
