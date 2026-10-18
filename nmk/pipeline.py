@@ -193,6 +193,20 @@ BAG_PROMPT = """Короткий фрагмент: человек передаё
   либо кассир берёт и смотрит такой лист.
 """
 
+# Neutral (non-leading) question: the model has to name what is handed over, instead of confirming "a bag".
+BAG_PRESENCE_PROMPT = """Короткий фрагмент видео кассы. Посмотри, что посетитель передаёт кассиру или кладёт на стол,
+и что лежит на столе кассира. Верни ТОЛЬКО JSON:
+{"what_happens": "<одно предложение>", "handed_item": "<banknotes|bag|documents|nothing|other>", "cloth_bag_on_desk": <true|false>}
+- "handed_item": что именно передают кассиру. "banknotes" — купюры или пачка денег (в руке, в пачке, в конверте);
+  "bag" — сумка или мешок из ткани (например, инкассаторская); "documents" — листы бумаги; "nothing" — ничего не передают.
+- "cloth_bag_on_desk": на столе кассира лежит сумка или мешок из ткани (не ноутбук, не машинка, не пачка денег).
+"""
+
+
+def bag_present(ans):
+    return str(ans.get("handed_item", "")).strip().lower() == "bag" or ans.get("cloth_bag_on_desk") is True
+
+
 BAG_OPEN_PROMPT = """Короткий фрагмент рабочего места кассира. Верни ТОЛЬКО JSON:
 {"what_happens": "<одно предложение>", "green_bag_opened_and_cash_taken_out": <true|false>}
 - "green_bag_opened_and_cash_taken_out": кассир открывает зелёную инкассаторскую сумку и достаёт из неё деньги.
@@ -370,6 +384,11 @@ def apply_rules(p1, p2, checks=None):
     starts = _num(p1.get("cashier_starts_work_sec"))
     bag_rx, bag_open, bag_safe = _num(bag.get("received_sec")), _num(bag.get("opened_sec")), _num(bag.get("cash_put_into_safe_sec"))
     has_bag = any(x is not None for x in (bag_rx, bag_open, bag_safe)) or at.get("sealed_bag_on_desk") is True
+    bp = checks.get("bag_presence")
+    bag_refuted = bool(bp) and not (bag_present(bp["ans"]) and not bp.get("_weak"))
+    if bag_refuted:   # the neutral look saw no bag: pass-1 bag claims (and bag-only logic) are dropped
+        has_bag = False
+        at = {**at, "sealed_bag_on_desk": False}
 
     # --- leaving the workplace (at_leave is overwritten by the leave snapshot when it ran)
     if leave is not None:
@@ -504,8 +523,9 @@ def apply_rules(p1, p2, checks=None):
     # Logical consistency: a type is only possible if its scenario happened in this clip.
     counting_seen = (any(w["ans"].get("counts_banknotes") is True for w in p2)
                      or ((checks.get("machine") or {}).get("ans") or {}).get("machine_running") is True)
-    bag_seen = (has_bag or ((checks.get("bag") or {}).get("ans") or {}).get("green_bag_handed_to_cashier") is True
-                or ((checks.get("bag_open") or {}).get("ans") or {}).get("green_bag_opened_and_cash_taken_out") is True)
+    bag_seen = not bag_refuted and (
+        has_bag or ((checks.get("bag") or {}).get("ans") or {}).get("green_bag_handed_to_cashier") is True
+        or ((checks.get("bag_open") or {}).get("ans") or {}).get("green_bag_opened_and_cash_taken_out") is True)
     safe_used = (checks.get("safe") is not None or at.get("safe_open") is True
                  or _num(p1.get("safe_opened_sec")) is not None)
     n_clients = len(clients)
@@ -712,15 +732,27 @@ def run_checks(model, processor, path, box, vid, p1, p2, dur, double_check=True,
             {"safe_door_open": False}, zoom=safe_box)
 
     bag_rx = _num((p1.get("sealed_bag") or {}).get("received_sec"))
-    if bag_rx is not None and bag_rx >= 2:   # handed over during the clip, not already on the desk
+    bag_open = _num((p1.get("sealed_bag") or {}).get("opened_sec"))
+    bag_safe = _num((p1.get("sealed_bag") or {}).get("cash_put_into_safe_sec"))
+    bag_at_leave = (p1.get("at_leave") or {}).get("sealed_bag_on_desk") is True
+    bag_ok = True
+    if bag_rx is not None or bag_open is not None or bag_safe is not None or bag_at_leave:
+        # Pass 1 claims a collection bag. Confirm with a neutral question first: a client handing over
+        # banknotes is often reported as "a green bag", and the leading bag questions below agree with it.
+        t = next(x for x in (bag_rx, bag_open, bag_safe, leave, 0.0) if x is not None)
+        bp = confirm("bag_presence", t - 3, t + 4, BAG_PRESENCE_PROMPT, bag_present,
+                     {"handed_item": "unconfirmed", "cloth_bag_on_desk": None}, shift=2.0)
+        if bp:
+            checks["bag_presence"] = bp
+            bag_ok = bag_present(bp["ans"]) and not bp.get("_weak")
+
+    if bag_ok and bag_rx is not None and bag_rx >= 2:   # handed over during the clip, not already on the desk
         checks["bag"] = confirm("bag", bag_rx - 3, bag_rx + 4, BAG_PROMPT,
                                 lambda a: (a.get("green_bag_handed_to_cashier") is True
                                            and a.get("paper_or_document_handed_over") is False),
                                 {"paper_or_document_handed_over": None}, shift=1.0)
 
-    bag_open = _num((p1.get("sealed_bag") or {}).get("opened_sec"))
-    bag_safe = _num((p1.get("sealed_bag") or {}).get("cash_put_into_safe_sec"))
-    if bag_open is not None or bag_safe is not None:
+    if bag_ok and (bag_open is not None or bag_safe is not None):
         t = bag_open if bag_open is not None else max(0.0, bag_safe - 8)
         checks["bag_open"] = confirm("bag_open", t - 2, t + 5, BAG_OPEN_PROMPT,
                                      lambda a: a.get("green_bag_opened_and_cash_taken_out") is True,
