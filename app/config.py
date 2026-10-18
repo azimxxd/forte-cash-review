@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     data_dir: Path = Path("runtime")
     frontend_dir: Path = Path("frontend/dist")
     model_enabled: bool = False
-    engine: Literal["qwen", "nmk"] = "qwen"
+    engine: Literal["qwen", "nmk"] = "nmk"
     nmk_dir: Path = Path("nmk")
     nmk_model_path: Path = Path("/root/models/Qwen3-VL-8B-Instruct")
     nmk_precision: Literal["4bit", "8bit", "bf16"] = "bf16"
