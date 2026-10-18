@@ -275,6 +275,43 @@ DOC_CHECK_PROMPT = """Фрагмент: клиент пришёл к кассе 
   и смотрит в него (до или в начале пересчёта денег).
 """
 
+# Neutral direction question: "the cashier gives money to the client" is often reported for a client depositing it.
+TRANSFER_PROMPT = """Короткий фрагмент у кассы. КАССИР — сотрудник со стороны ноутбука и счётной машинки;
+КЛИЕНТ сидит или стоит напротив кассира. Посмотри, кто кому передаёт деньги. Верни ТОЛЬКО JSON:
+{"what_happens": "<одно предложение>", "money_moves": "<client_to_cashier|cashier_to_client|none|unclear>"}
+- "client_to_cashier": клиент отдаёт деньги кассиру или кладёт их на стол, а кассир их берёт.
+- "cashier_to_client": кассир отдаёт купюры клиенту в руки или пододвигает их к клиенту, и клиент их забирает.
+- "none": деньги никто никому не передаёт.
+"""
+
+
+def returns_money(ans):
+    return str(ans.get("money_moves", "")).strip().lower() == "cashier_to_client"
+
+
+AFTER_COUNT_PROMPT = """Фрагмент сразу после того, как кассир пересчитала деньги. Посмотри, что кассир делает
+с пересчитанными купюрами. Верни ТОЛЬКО JSON:
+{"what_happens": "<одно предложение>", "next_action": "<checks_authenticity|stacks_or_bundles|gives_to_client|puts_away|still_counting|other>", "event_sec": <секунда от начала фрагмента>}
+- "checks_authenticity": проверяет купюры на подлинность — подносит к детектору или УФ-лампе, смотрит на просвет.
+  Пропуск купюр через счётную машинку — это пересчёт, а не проверка подлинности.
+- "stacks_or_bundles": складывает пересчитанные купюры в одну стопку или пачку, выравнивает, перетягивает.
+- "gives_to_client": отдаёт деньги клиенту. "puts_away": убирает в сейф, ящик или кассу.
+- "still_counting": продолжает пересчитывать.
+"""
+
+
+def after_count_action(ans):
+    return str(ans.get("next_action", "")).strip().lower()
+
+
+def _before_counting(w, p2):
+    """A handover seen before any counting is the client's deposit, not a return of counted money."""
+    def counting(x):
+        return x["ans"].get("counts_banknotes") is True or x["ans"].get("checks_banknotes_on_device") is True
+    starts = [x["start"] for x in p2 if counting(x)]
+    return bool(starts) and not counting(w) and w["t"] < min(starts)
+
+
 NEXT_CLIENT_PROMPT = """Фрагмент: к кассе подходит следующий клиент, пока у кассира может быть операция предыдущего клиента.
 Верни ТОЛЬКО JSON:
 {
@@ -453,12 +490,17 @@ def apply_rules(p1, p2, checks=None):
     if clients and not has_bag:
         counting = sorted(w["t"] for w in p2 if w["ans"].get("counts_banknotes") is True)
         first_count = counting[0] if counting else None
-        gives = [w for w in sorted(p2, key=lambda w: w["t"]) if w["ans"].get("gives_banknotes_to_client") is True]
-        strong = [w for w in gives if w["ans"].get("counts_banknotes") is True]
+        gives = [w for w in sorted(p2, key=lambda w: w["t"]) if w["ans"].get("gives_banknotes_to_client") is True
+                 and not _before_counting(w, p2)]
+        tr = checks.get("transfer")
+        if tr is not None and not returns_money(tr["ans"]):
+            gives = []          # the neutral look saw the client handing money over (or nothing), not a return
+        strong = [w for w in gives if w["ans"].get("counts_banknotes") is True and not (tr or {}).get("_weak")]
         if strong:
             add(strong[0]["t"], "COUNTED_CASH_RETURNED", "Кассир в процессе пересчёта вернула клиенту часть принятых денег.")
-        elif gives:   # money handed back to the client, counting not confirmed: keep as weak evidence
-            add(gives[0]["t"], "COUNTED_CASH_RETURNED", "Кассир вернула клиенту часть принятых денег.", 0)
+        elif gives:   # handed back, counting not confirmed: weak unless the direction check confirmed it twice
+            add(gives[0]["t"], "COUNTED_CASH_RETURNED", "Кассир вернула клиенту часть принятых денег.",
+                min(1, ev_of(tr)) if tr is not None else 0)
         dk = checks.get("doc_check")
         seen_doc = any(w["ans"].get("looks_at_document") is True and w["t"] <= first_count + 1 for w in p2) \
             if first_count is not None else False
@@ -516,6 +558,12 @@ def apply_rules(p1, p2, checks=None):
             add(combined["t"], "CASH_AUTHENTICITY_NOT_CHECKED",
                 "После пересчёта кассир сложила купюры в одну стопку, не проверив их на подлинность.")
 
+    # Authenticity: counted banknotes go straight into a stack without a detector/lamp check (client or not).
+    ac = checks.get("after_count")
+    if ac and after_count_action(ac["ans"]) == "stacks_or_bundles":
+        add(ac["t"], "CASH_AUTHENTICITY_NOT_CHECKED",
+            "После пересчёта кассир сложила купюры в стопку, не проверив их на подлинность.", ev_of(ac))
+
     for typ, c in (checks.get("candidates") or {}).items():
         if c["ans"].get("visible") is True:
             add(c["t"], typ, c.get("description") or "", min(1, ev_of(c)))
@@ -529,11 +577,17 @@ def apply_rules(p1, p2, checks=None):
     safe_used = (checks.get("safe") is not None or at.get("safe_open") is True
                  or _num(p1.get("safe_opened_sec")) is not None)
     n_clients = len(clients)
+    # A return needs a handover that is not the deposit and that the direction check did not refute.
+    any_give = [w for w in p2 if w["ans"].get("gives_banknotes_to_client") is True]
+    tr = checks.get("transfer")
+    return_ok = not (any_give and all(_before_counting(w, p2) for w in any_give)) \
+        and not (tr is not None and not returns_money(tr["ans"]))
     possible = {
-        "COUNTED_CASH_RETURNED": n_clients >= 1,
+        "COUNTED_CASH_RETURNED": n_clients >= 1 and return_ok,
         "CASH_COUNTING_WITHOUT_DOCUMENT_CHECK": n_clients >= 1 and counting_seen,
         "CASH_COUNTED_WITHOUT_CLIENT_PRESENT": n_clients >= 1 and counting_seen,
-        "CASH_AUTHENTICITY_NOT_CHECKED": counting_seen,
+        "CASH_AUTHENTICITY_NOT_CHECKED": counting_seen and not (
+            ac is not None and after_count_action(ac["ans"]) == "checks_authenticity"),
         "PREVIOUS_CLIENT_CASH_NOT_SECURED": n_clients >= 2,
         "CLIENTS_CASH_MIXED": n_clients >= 2,
         "NEXT_CLIENT_STARTED_BEFORE_PREVIOUS_COMPLETED": n_clients >= 2,
@@ -815,6 +869,26 @@ def run_checks(model, processor, path, box, vid, p1, p2, dur, double_check=True,
                                       lambda a: a.get("cashier_takes_and_reads_paper_from_client") is False,
                                       {"cashier_takes_and_reads_paper_from_client": None},
                                       shift=1.0, fps=2.0, frames=24)
+
+    # Money "handed to the client": check the direction with a neutral question (deposits look the same).
+    gives = [w for w in sorted(p2, key=lambda w: w["t"])
+             if w["ans"].get("gives_banknotes_to_client") is True and not _before_counting(w, p2)]
+    if gives:
+        g = gives[0]["t"]
+        tr = confirm("transfer", g - 2.5, g + 2.5, TRANSFER_PROMPT, returns_money,
+                     {"money_moves": "unconfirmed"}, shift=1.5, fps=4.0, frames=20)
+        if tr:
+            checks["transfer"] = tr
+
+    # Right after the last counting: authenticity check, or straight into a stack? (no client needed)
+    counted = [w for w in p2 if w["ans"].get("counts_banknotes") is True]
+    if counted:
+        last = max(w["end"] for w in counted)
+        ac = confirm("after_count", last - 1, min(dur, last + 7), AFTER_COUNT_PROMPT,
+                     lambda a: after_count_action(a) == "stacks_or_bundles",
+                     {"next_action": "unconfirmed"}, shift=1.5, fps=3.0, frames=20)
+        if ac:
+            checks["after_count"] = ac
 
     client_leaves = sorted(t for t in (_num(c.get("leave_sec")) for c in (p1.get("clients") or [])
                                        if isinstance(c, dict)) if t is not None)
