@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 import "@fontsource-variable/open-sans";
 import "./style.css";
-import mark from "./assets/kadr-mark.svg";
 
 type Rule = {
   id: string;
@@ -385,9 +384,8 @@ function App() {
       <header className="site-header">
         <div className="header-inner">
           <a href="/" className="brand">
-            <img src={mark} alt="" width={36} height={36} />
-            <span className="brand-name">Кадр</span>
-            <span className="brand-product">проверка кассовых видео</span>
+            <span className="brand-name">Проверка кассовых видео</span>
+            <span className="brand-product">Datathon 26</span>
           </a>
           {(finished || job?.status === "failed") && (
             <button className="secondary header-new" onClick={reset}>

@@ -172,14 +172,11 @@ h3 {
   text-decoration: none;
   flex: none;
 }
-.brand img {
-  display: block;
-}
 .brand-name {
   color: var(--brand-maroon);
   font-weight: 700;
-  font-size: 24px;
-  letter-spacing: -0.4px;
+  font-size: 20px;
+  letter-spacing: -0.3px;
 }
 .brand-product {
   padding-left: var(--space-3);
